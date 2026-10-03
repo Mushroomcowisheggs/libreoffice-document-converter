@@ -38,6 +38,11 @@ global.Worker = Worker;
 let cachedWasmModule = null;
 let cachedWasmBinary = null;
 
+// The Emscripten factory in soffice.cjs is a CommonJS singleton: require() caches
+// it, so at most one runtime instance can exist per process. A second createModule()
+// never receives onRuntimeInitialized and used to hang forever instead of failing.
+let moduleCreated = false;
+
 // Change to wasm directory for relative path resolution (if supported)
 // Note: process.chdir() is not available in worker threads
 const origCwd = process.cwd();
@@ -172,6 +177,21 @@ global.XMLHttpRequest = NodeXMLHttpRequest;
  * @returns {Promise<Object>} - The initialized Emscripten module
  */
 function createModule(config = {}) {
+  // One Emscripten runtime per process: the factory body lives in the CommonJS
+  // cache, so a second call can never fire onRuntimeInitialized. Reject loudly
+  // instead of returning a promise that never settles.
+  if (moduleCreated) {
+    return Promise.reject(
+      new Error(
+        'LibreOffice WASM module already initialized in this process. The Emscripten ' +
+          'runtime cannot be created twice, so use one converter per process: reuse the ' +
+          'existing converter, or isolate converters with createWorkerConverter() ' +
+          '(worker thread) / createSubprocessConverter() (child process).'
+      )
+    );
+  }
+  moduleCreated = true;
+
   return new Promise((resolve, reject) => {
     // Reset progress tracking
     lastProgress = 0;
